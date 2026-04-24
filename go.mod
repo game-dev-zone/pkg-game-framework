@@ -1,9 +1,9 @@
-module github.com/club8/pkg-game-framework
+module github.com/game-dev-zone/pkg-game-framework
 
 go 1.25.0
 
 require (
-	github.com/club8/pkg-proto v0.0.0
+	github.com/game-dev-zone/pkg-proto v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/consul/api v1.29.2
 	github.com/mbobakov/grpc-consul-resolver v1.5.3
@@ -48,4 +48,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/club8/pkg-proto => ../pkg-proto
+replace github.com/game-dev-zone/pkg-proto => ../pkg-proto

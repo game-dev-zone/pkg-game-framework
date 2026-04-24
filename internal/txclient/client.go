@@ -6,7 +6,7 @@ package txclient
 import (
 	_ "github.com/mbobakov/grpc-consul-resolver" // register consul resolver scheme
 
-	txv1 "github.com/club8/pkg-proto/gen/go/club/tx/v1"
+	txv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/tx/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

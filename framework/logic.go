@@ -13,10 +13,10 @@ import (
 	"context"
 	"time"
 
-	gamev1 "github.com/club8/pkg-proto/gen/go/club/game/v1"
-	recordv1 "github.com/club8/pkg-proto/gen/go/club/record/v1"
-	txv1 "github.com/club8/pkg-proto/gen/go/club/tx/v1"
-	"github.com/club8/pkg-game-framework/room"
+	gamev1 "github.com/game-dev-zone/pkg-proto/gen/go/club/game/v1"
+	recordv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/record/v1"
+	txv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/tx/v1"
+	"github.com/game-dev-zone/pkg-game-framework/room"
 	"github.com/rs/zerolog"
 )
 

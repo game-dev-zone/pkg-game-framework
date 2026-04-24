@@ -1,9 +1,9 @@
 package grpcserver
 
 import (
-	commonv1 "github.com/club8/pkg-proto/gen/go/club/common/v1"
-	gamev1 "github.com/club8/pkg-proto/gen/go/club/game/v1"
-	"github.com/club8/pkg-game-framework/room"
+	commonv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/common/v1"
+	gamev1 "github.com/game-dev-zone/pkg-proto/gen/go/club/game/v1"
+	"github.com/game-dev-zone/pkg-game-framework/room"
 )
 
 func codeFromRoomErr(err error) commonv1.ErrorCode {

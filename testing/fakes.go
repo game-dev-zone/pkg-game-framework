@@ -7,9 +7,9 @@ import (
 	"errors"
 	"sync"
 
-	commonv1 "github.com/club8/pkg-proto/gen/go/club/common/v1"
-	recordv1 "github.com/club8/pkg-proto/gen/go/club/record/v1"
-	txv1 "github.com/club8/pkg-proto/gen/go/club/tx/v1"
+	commonv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/common/v1"
+	recordv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/record/v1"
+	txv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/tx/v1"
 	"google.golang.org/grpc"
 )
 

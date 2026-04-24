@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	gamev1 "github.com/club8/pkg-proto/gen/go/club/game/v1"
+	gamev1 "github.com/game-dev-zone/pkg-proto/gen/go/club/game/v1"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
