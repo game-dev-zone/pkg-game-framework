@@ -3,7 +3,7 @@ module github.com/game-dev-zone/pkg-game-framework
 go 1.25.0
 
 require (
-	github.com/game-dev-zone/pkg-proto v0.0.0
+	github.com/game-dev-zone/pkg-proto v1.0.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/consul/api v1.29.2
 	github.com/mbobakov/grpc-consul-resolver v1.5.3
