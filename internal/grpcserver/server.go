@@ -16,12 +16,23 @@ import (
 	gamev1 "github.com/game-dev-zone/pkg-proto/gen/go/club/game/v1"
 	recordv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/record/v1"
 	txv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/tx/v1"
+	"github.com/game-dev-zone/pkg-game-framework/internal/cardclient"
+	"github.com/game-dev-zone/pkg-game-framework/internal/reportclient"
 	"github.com/game-dev-zone/pkg-game-framework/internal/session"
 	"github.com/game-dev-zone/pkg-game-framework/internal/txclient"
 	"github.com/game-dev-zone/pkg-game-framework/room"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
+
+// SettlementMetaInfo 是 framework 端 SettlementMeta 介面回傳的反序列化結構。
+// grpcserver 不直接 import framework package（會循環），透過 LogicAdapter 提供。
+type SettlementMetaInfo struct {
+	ClubID    string
+	RoundID   string
+	RakeCard  int64
+	StartedAt time.Time
+}
 
 // LogicAdapter 是 framework → logic 的最小介面。
 // 避免 grpcserver 直接 import framework（會產生循環）。
@@ -34,6 +45,11 @@ type LogicAdapter interface {
 	OnEnterRoom(ctx FrameworkContext, req *gamev1.EnterRoomRequest, room *room.Room) error
 	OnPlaceBet(ctx FrameworkContext, req *gamev1.PlaceBetRequest, room *room.Room) error
 	OnSettle(ctx FrameworkContext, req *gamev1.SettleRequest, room *room.Room) ([]*gamev1.Payout, error)
+
+	// SettlementInfo 為「可選」hook：framework adapter 在 GameLogic 實作
+	// SettlementMeta 介面時回傳；否則回傳 (info, false)。
+	// info.ClubID 為空字串 = 跳過 report+card 整合。
+	SettlementInfo(req *gamev1.SettleRequest, room *room.Room) (SettlementMetaInfo, bool)
 }
 
 // FrameworkContext 是 framework.Context 的結構映射（由 framework package 實作）。
@@ -57,6 +73,8 @@ type Server struct {
 	sess          *session.Store
 	tx            *txclient.Client
 	record        recordv1.RecordServiceClient // 可為 nil（本機 dev 不起 record）
+	report        *reportclient.Client         // 可為 nil（dev 預設不啟用整合）
+	card          *cardclient.Client           // 可為 nil
 	keys          txclient.Keys
 	logic         LogicAdapter
 	log           zerolog.Logger
@@ -69,6 +87,8 @@ func New(
 	sess *session.Store,
 	tx *txclient.Client,
 	record recordv1.RecordServiceClient,
+	report *reportclient.Client,
+	card *cardclient.Client,
 	logic LogicAdapter,
 	newCtx NewContextFn,
 	recordTimeout time.Duration,
@@ -79,6 +99,8 @@ func New(
 		sess:          sess,
 		tx:            tx,
 		record:        record,
+		report:        report,
+		card:          card,
 		keys:          txclient.Keys{GameID: logic.GameID()},
 		logic:         logic,
 		log:           log.With().Str("component", "grpcserver").Logger(),
@@ -266,6 +288,7 @@ func (s *Server) Settle(ctx context.Context, req *gamev1.SettleRequest) (*gamev1
 
 	r.BroadcastPayout(payouts)
 	s.writeRecord(ctx, req.RoomId, payouts, startedAt, totalPot, traceID)
+	s.notifyReportAndRake(ctx, req, payouts, startedAt, totalPot, traceID)
 	s.mgr.Remove(req.RoomId)
 	_ = s.sess.Unbind(ctx, req.RoomId)
 
@@ -361,5 +384,92 @@ func (s *Server) writeRecord(
 		s.log.Error().Err(err).Str("room_id", roomID).
 			Str("idempotency_key", s.keys.Settle(roomID, "")).
 			Msg("record write failed; run back-office replay from this log")
+	}
+}
+
+// notifyReportAndRake 在 Settle 完成後 fire-and-forget：
+//   1. 若 GameLogic 實作 SettlementMeta 且 ClubID != "" → POST report-service ingest
+//   2. 若 SettlementMeta.RakeCard > 0 且 card client 配置 → POST card-service consume
+// 失敗只 log warn，不影響 client 已收到的成功 Settle 回應。
+func (s *Server) notifyReportAndRake(
+	parent context.Context,
+	req *gamev1.SettleRequest,
+	payouts []*gamev1.Payout,
+	startedAt time.Time,
+	totalPot int64,
+	traceID string,
+) {
+	r, ok := s.mgr.Get(req.RoomId)
+	if !ok {
+		// settle 後 room 已 remove；改不檢查（payouts 帶足夠資訊）
+	}
+	info, has := s.logic.SettlementInfo(req, r)
+	if !has || info.ClubID == "" {
+		return
+	}
+
+	// 1. report-service ingest（背景跑，不阻塞）
+	if s.report != nil {
+		go func(info SettlementMetaInfo) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			lite := make([]reportclient.PayoutLite, 0, len(payouts))
+			for _, p := range payouts {
+				lite = append(lite, reportclient.PayoutLite{
+					UserID: p.UserId, Delta: p.Delta, Reason: p.Reason,
+				})
+			}
+			clubUUID, err := uuid.Parse(info.ClubID)
+			if err != nil {
+				s.log.Warn().Str("club_id", info.ClubID).Err(err).Msg("report ingest: bad club_id (not UUID)")
+				return
+			}
+			// game_record_id 與 record-service 寫入的 ID 對齊：framework 用
+			// idempotency_key 寫 record；read-model 端只需有「同 room 同 settle 的唯一 ID」即可
+			// → 這裡用 deterministic UUID 從 idempotency_key 推（v5 namespace）
+			recordIDemulated := uuid.NewSHA1(uuid.NameSpaceURL, []byte(s.keys.Settle(req.RoomId, "")))
+			started := info.StartedAt
+			if started.IsZero() {
+				started = startedAt
+			}
+			err = s.report.Ingest(ctx, reportclient.IngestRequest{
+				GameRecordID: recordIDemulated,
+				ClubID:       clubUUID,
+				GameID:       s.logic.GameID(),
+				RoomID:       req.RoomId,
+				RoundID:      info.RoundID,
+				StartedAt:    started,
+				SettledAt:    time.Now(),
+				TotalPot:     totalPot,
+				RakeCard:     info.RakeCard,
+				PerUser:      reportclient.PayoutsToPerUser(lite),
+			})
+			if err != nil {
+				s.log.Warn().Err(err).Str("room_id", req.RoomId).Msg("report ingest failed")
+			}
+		}(info)
+	}
+
+	// 2. card-service consume rake（背景跑）
+	if s.card != nil && info.RakeCard > 0 {
+		go func(info SettlementMetaInfo) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			err := s.card.Consume(ctx, cardclient.ConsumeRequest{
+				FromOwnerType:  "CLUB",
+				FromOwnerID:    info.ClubID,
+				Quantity:       info.RakeCard,
+				Reason:         "RAKE",
+				RefRoomID:      req.RoomId,
+				RefGameID:      s.logic.GameID(),
+				IdempotencyKey: fmt.Sprintf("%s-rake-%s", s.logic.GameID(), req.RoomId),
+				TraceID:        traceID,
+				Note:           "auto rake from framework Settle hook",
+			})
+			if err != nil {
+				s.log.Warn().Err(err).Str("club_id", info.ClubID).Int64("rake", info.RakeCard).
+					Msg("card consume rake failed")
+			}
+		}(info)
 	}
 }

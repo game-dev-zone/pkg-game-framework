@@ -78,3 +78,26 @@ type Context interface {
 	Tx() txv1.TxServiceClient
 	Record() recordv1.RecordServiceClient
 }
+
+// SettlementMeta 是「可選」介面（interface segregation）。GameLogic 若實作此
+// 介面，框架會在 Settle 完成後 fire-and-forget 額外做兩件事：
+//   1. POST report-service /internal/reports/ingest（產 match_settlement read-model）
+//   2. POST card-service /internal/cards/consume（依 RakeCard 從俱樂部庫存扣抽水）
+//
+// 對舊遊戲（DDZ 範例）保持向下相容：未實作此介面 = 維持原狀（只寫 Tx + Record）。
+type SettlementMeta interface {
+	// SettlementInfo 在每次 Settle 時被呼叫，請回傳該局所屬的 club / 抽水房卡數
+	// / 該局起始時間（用於 report 對齊）。
+	//
+	// ClubID 為空字串 = 無歸屬俱樂部，框架會跳過 report+card 整合（仍寫 Tx +
+	// Record）。RakeCard 為 0 = 不抽水。
+	SettlementInfo(req *gamev1.SettleRequest, room *room.Room) SettlementMetaResult
+}
+
+// SettlementMetaResult 是 SettlementInfo 的回傳；零值代表「無 club、無抽水」。
+type SettlementMetaResult struct {
+	ClubID    string // UUID 格式；空字串 = 不做 report/card 整合
+	RoundID   string // 可選；給 report.match_settlements.round_id
+	RakeCard  int64  // 該局抽水房卡數（從 club_settings.card_per_room + rake_bps 推算）
+	StartedAt time.Time
+}

@@ -13,9 +13,11 @@ import (
 	gamev1 "github.com/game-dev-zone/pkg-proto/gen/go/club/game/v1"
 	recordv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/record/v1"
 	txv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/tx/v1"
+	"github.com/game-dev-zone/pkg-game-framework/internal/cardclient"
 	"github.com/game-dev-zone/pkg-game-framework/internal/discovery"
 	"github.com/game-dev-zone/pkg-game-framework/internal/grpcserver"
 	"github.com/game-dev-zone/pkg-game-framework/internal/recordclient"
+	"github.com/game-dev-zone/pkg-game-framework/internal/reportclient"
 	"github.com/game-dev-zone/pkg-game-framework/internal/session"
 	"github.com/game-dev-zone/pkg-game-framework/internal/txclient"
 	"github.com/game-dev-zone/pkg-game-framework/room"
@@ -104,7 +106,19 @@ func Run(parent context.Context, cfg Config, logic GameLogic) error {
 		return &fctx{Context: parent, traceID: traceID, log: logger, tx: txc.Raw(), record: recClient}
 	}
 
-	svc := grpcserver.New(mgr, sess, txc, recClient, adapter, newCtx, cfg.RecordTimeout, logger)
+	// 可選的 report / card HTTP client：URL 為空 = 整合關閉（dev 預設）
+	var reportC *reportclient.Client
+	if cfg.ReportServiceURL != "" {
+		reportC = reportclient.New(cfg.ReportServiceURL, 2*time.Second)
+		logger.Info().Str("url", cfg.ReportServiceURL).Msg("report-service integration enabled")
+	}
+	var cardC *cardclient.Client
+	if cfg.CardServiceURL != "" {
+		cardC = cardclient.New(cfg.CardServiceURL, 2*time.Second)
+		logger.Info().Str("url", cfg.CardServiceURL).Msg("card-service rake integration enabled")
+	}
+
+	svc := grpcserver.New(mgr, sess, txc, recClient, reportC, cardC, adapter, newCtx, cfg.RecordTimeout, logger)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {
@@ -231,4 +245,20 @@ func (a *logicAdapter) OnPlaceBet(ctx grpcserver.FrameworkContext, req *gamev1.P
 
 func (a *logicAdapter) OnSettle(ctx grpcserver.FrameworkContext, req *gamev1.SettleRequest, r *room.Room) ([]*gamev1.Payout, error) {
 	return a.logic.OnSettle(ctx.(*fctx), req, r)
+}
+
+// SettlementInfo 把可選 SettlementMeta interface 結果橋接到 grpcserver。
+// 沒實作 = 回傳 zero + false，framework 跳過 report/card 整合。
+func (a *logicAdapter) SettlementInfo(req *gamev1.SettleRequest, r *room.Room) (grpcserver.SettlementMetaInfo, bool) {
+	meta, ok := a.logic.(SettlementMeta)
+	if !ok {
+		return grpcserver.SettlementMetaInfo{}, false
+	}
+	res := meta.SettlementInfo(req, r)
+	return grpcserver.SettlementMetaInfo{
+		ClubID:    res.ClubID,
+		RoundID:   res.RoundID,
+		RakeCard:  res.RakeCard,
+		StartedAt: res.StartedAt,
+	}, true
 }
