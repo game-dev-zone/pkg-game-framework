@@ -3,7 +3,7 @@ module github.com/game-dev-zone/pkg-game-framework
 go 1.25.0
 
 require (
-	github.com/game-dev-zone/pkg-proto v1.0.1
+	github.com/game-dev-zone/pkg-proto v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/consul/api v1.29.2
 	github.com/mbobakov/grpc-consul-resolver v1.5.3
@@ -47,5 +47,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/game-dev-zone/pkg-proto => ../pkg-proto
