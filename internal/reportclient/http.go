@@ -13,9 +13,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
+	internalauth "github.com/game-dev-zone/pkg-internal-auth"
 )
 
 type Client struct {
@@ -66,6 +68,13 @@ func (c *Client) Ingest(parent context.Context, req IngestRequest) error {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	// service-to-service token；report-service /internal 群組 phase H 後要求 token。
+	// secret 為空時不加 → middleware 退化為 pass-through（dev 友好；prod 必填）
+	if secret := os.Getenv("INTERNAL_SERVICE_SECRET"); secret != "" {
+		if tok, err := internalauth.SignNow(secret, "game-framework"); err == nil {
+			httpReq.Header.Set(internalauth.Header, tok)
+		}
+	}
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return err
