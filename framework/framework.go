@@ -262,3 +262,18 @@ func (a *logicAdapter) SettlementInfo(req *gamev1.SettleRequest, r *room.Room) (
 		StartedAt: res.StartedAt,
 	}, true
 }
+
+// BuildReplayBlob 把可選 ReplayProducer interface 結果橋接到 grpcserver。
+// 沒實作或 BuildReplayBlob 回 error → (nil, 0, false)，framework 寫 record
+// 時 replay_pb 留空（client 偵測到 → 該局不可回放）。
+func (a *logicAdapter) BuildReplayBlob(req *gamev1.SettleRequest, r *room.Room) ([]byte, uint32, bool) {
+	rp, ok := a.logic.(ReplayProducer)
+	if !ok {
+		return nil, 0, false
+	}
+	blob, version, err := rp.BuildReplayBlob(req, r)
+	if err != nil || len(blob) == 0 || version == 0 {
+		return nil, 0, false
+	}
+	return blob, version, true
+}

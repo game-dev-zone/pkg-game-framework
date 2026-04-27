@@ -50,6 +50,12 @@ type LogicAdapter interface {
 	// SettlementMeta 介面時回傳；否則回傳 (info, false)。
 	// info.ClubID 為空字串 = 跳過 report+card 整合。
 	SettlementInfo(req *gamev1.SettleRequest, room *room.Room) (SettlementMetaInfo, bool)
+
+	// BuildReplayBlob 為「可選」hook：GameLogic 實作 ReplayProducer 介面
+	// 時回傳 (blob, version, true)；否則 (nil, 0, false)。
+	// blob 不空 = 寫進 game_records.replay_pb；客戶端依 game_id+version
+	// 切到對應 ReplayPlayer 重跑邏輯（明牌呈現）。
+	BuildReplayBlob(req *gamev1.SettleRequest, room *room.Room) ([]byte, uint32, bool)
 }
 
 // FrameworkContext 是 framework.Context 的結構映射（由 framework package 實作）。
@@ -287,7 +293,9 @@ func (s *Server) Settle(ctx context.Context, req *gamev1.SettleRequest) (*gamev1
 	}
 
 	r.BroadcastPayout(payouts)
-	s.writeRecord(ctx, req.RoomId, payouts, startedAt, totalPot, traceID)
+	// optional ReplayProducer：產 blob 寫進 game_records.replay_pb
+	replayPb, replayVersion, _ := s.logic.BuildReplayBlob(req, r)
+	s.writeRecord(ctx, req.RoomId, payouts, startedAt, totalPot, traceID, replayPb, replayVersion)
 	s.notifyReportAndRake(ctx, req, payouts, startedAt, totalPot, traceID)
 	s.mgr.Remove(req.RoomId)
 	_ = s.sess.Unbind(ctx, req.RoomId)
@@ -354,6 +362,8 @@ func (s *Server) refundBet(ctx context.Context, req *gamev1.PlaceBetRequest, tra
 }
 
 // writeRecord 以 2 秒超時背景寫 record；失敗不影響 Settle 回應。
+// replayPb/replayVersion 來自 ReplayProducer.BuildReplayBlob，可能為 (nil, 0)
+// 表示該遊戲不支援回放。
 func (s *Server) writeRecord(
 	parent context.Context,
 	roomID string,
@@ -361,6 +371,8 @@ func (s *Server) writeRecord(
 	startedAt time.Time,
 	totalPot int64,
 	traceID string,
+	replayPb []byte,
+	replayVersion uint32,
 ) {
 	if s.record == nil {
 		return
@@ -377,6 +389,8 @@ func (s *Server) writeRecord(
 			TotalPot:       totalPot,
 			Payouts:        payouts,
 			IdempotencyKey: s.keys.Settle(roomID, ""),
+			ReplayPb:       replayPb,
+			ReplayVersion:  replayVersion,
 			TraceId:        traceID,
 		},
 	})

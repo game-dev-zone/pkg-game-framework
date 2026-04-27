@@ -101,3 +101,22 @@ type SettlementMetaResult struct {
 	RakeCard  int64  // 該局抽水房卡數（從 club_settings.card_per_room + rake_bps 推算）
 	StartedAt time.Time
 }
+
+// ReplayProducer 是「可選」介面：GameLogic 實作此介面，框架在 Settle 後會
+// 呼叫 BuildReplayBlob 產牌局回放 blob（club.replay.v1.ReplayBlob 序列化），
+// 寫進 RecordService.WriteGameRecord 的 replay_pb / replay_version 欄位。
+//
+// 客戶端拿到 record 後依 game_id + version 切換到對應的 ReplayPlayer 重跑邏輯
+// 並以「明牌」呈現（所有手牌可見）；版本不相容時 client 顯示降級訊息。
+//
+// 自研遊戲（DDZ / niuniu）建議實作；三方遊戲（fish / slots）可不實作。
+// 詳細協議與版本相容策略見 docs/replay.md。
+type ReplayProducer interface {
+	// BuildReplayBlob 產該局完整 ReplayBlob bytes（已 proto.Marshal）。
+	// version 對應 club.replay.v1.ReplayBlob.version；遊戲 Logic 改規則時
+	// bump，並在 PCK 內保留所有歷史版本的 ReplayPlayer，新舊對局分流跑。
+	//
+	// 回傳 (nil, 0, nil) 表示「本局不產 replay」（如 incomplete settle）；
+	// 回傳 error 不阻擋主流程，由框架 log 警告。
+	BuildReplayBlob(req *gamev1.SettleRequest, room *room.Room) (blob []byte, version uint32, err error)
+}
