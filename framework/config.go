@@ -31,6 +31,14 @@ type Config struct {
 	// CardServiceURL：若非空且 SettlementMeta.RakeCard > 0，框架會在 Settle
 	// 完成後 POST /internal/cards/consume 從俱樂部扣抽水房卡。
 	CardServiceURL string
+
+	// NotifyServiceURL：若非空，框架在 Settle 後對 payout.delta >= NotifyMinPayout
+	// 的 winner 推「中大獎」訊息（channel=transaction，用 tx.large_credit 樣板語意）。
+	// 空 = 不送 push。
+	NotifyServiceURL string
+	// NotifyMinPayout：觸發大額 push 的最低 delta 值（含正號；正數才算贏）。
+	// 預設 0 = 由 LoadFromEnv 用 GAME_NOTIFY_MIN_PAYOUT env 補（預設 1000）。
+	NotifyMinPayout int64
 }
 
 // LoadFromEnv 以環境變數覆蓋 cfg 中的零值欄位並回傳填充後的 Config。
@@ -68,6 +76,12 @@ func LoadFromEnv(cfg Config) Config {
 	}
 	if cfg.CardServiceURL == "" {
 		cfg.CardServiceURL = envStr("CARD_SERVICE_URL", "")
+	}
+	if cfg.NotifyServiceURL == "" {
+		cfg.NotifyServiceURL = envStr("NOTIFY_SERVICE_URL", "")
+	}
+	if cfg.NotifyMinPayout == 0 {
+		cfg.NotifyMinPayout = int64(envInt("GAME_NOTIFY_MIN_PAYOUT", 1000))
 	}
 	return cfg
 }

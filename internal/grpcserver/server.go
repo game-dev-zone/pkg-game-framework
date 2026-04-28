@@ -17,6 +17,7 @@ import (
 	recordv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/record/v1"
 	txv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/tx/v1"
 	"github.com/game-dev-zone/pkg-game-framework/internal/cardclient"
+	"github.com/game-dev-zone/pkg-game-framework/internal/notifyclient"
 	"github.com/game-dev-zone/pkg-game-framework/internal/reportclient"
 	"github.com/game-dev-zone/pkg-game-framework/internal/session"
 	"github.com/game-dev-zone/pkg-game-framework/internal/txclient"
@@ -75,17 +76,19 @@ type NewContextFn func(ctx context.Context, traceID string) FrameworkContext
 type Server struct {
 	gamev1.UnimplementedGameServiceServer
 
-	mgr           *room.Manager
-	sess          *session.Store
-	tx            *txclient.Client
-	record        recordv1.RecordServiceClient // 可為 nil（本機 dev 不起 record）
-	report        *reportclient.Client         // 可為 nil（dev 預設不啟用整合）
-	card          *cardclient.Client           // 可為 nil
-	keys          txclient.Keys
-	logic         LogicAdapter
-	log           zerolog.Logger
-	newCtx        NewContextFn
-	recordTimeout time.Duration
+	mgr             *room.Manager
+	sess            *session.Store
+	tx              *txclient.Client
+	record          recordv1.RecordServiceClient // 可為 nil（本機 dev 不起 record）
+	report          *reportclient.Client         // 可為 nil（dev 預設不啟用整合）
+	card            *cardclient.Client           // 可為 nil
+	notify          *notifyclient.Client         // 可為 nil；NOTIFY_SERVICE_URL 為空時不送 push
+	notifyMinPayout int64                        // payout.delta >= 此值才推「中大獎」；0 = 不限制
+	keys            txclient.Keys
+	logic           LogicAdapter
+	log             zerolog.Logger
+	newCtx          NewContextFn
+	recordTimeout   time.Duration
 }
 
 func New(
@@ -95,23 +98,27 @@ func New(
 	record recordv1.RecordServiceClient,
 	report *reportclient.Client,
 	card *cardclient.Client,
+	notify *notifyclient.Client,
+	notifyMinPayout int64,
 	logic LogicAdapter,
 	newCtx NewContextFn,
 	recordTimeout time.Duration,
 	log zerolog.Logger,
 ) *Server {
 	return &Server{
-		mgr:           mgr,
-		sess:          sess,
-		tx:            tx,
-		record:        record,
-		report:        report,
-		card:          card,
-		keys:          txclient.Keys{GameID: logic.GameID()},
-		logic:         logic,
-		log:           log.With().Str("component", "grpcserver").Logger(),
-		newCtx:        newCtx,
-		recordTimeout: recordTimeout,
+		mgr:             mgr,
+		sess:            sess,
+		tx:              tx,
+		record:          record,
+		report:          report,
+		card:            card,
+		notify:          notify,
+		notifyMinPayout: notifyMinPayout,
+		keys:            txclient.Keys{GameID: logic.GameID()},
+		logic:           logic,
+		log:             log.With().Str("component", "grpcserver").Logger(),
+		newCtx:          newCtx,
+		recordTimeout:   recordTimeout,
 	}
 }
 
@@ -297,6 +304,7 @@ func (s *Server) Settle(ctx context.Context, req *gamev1.SettleRequest) (*gamev1
 	replayPb, replayVersion, _ := s.logic.BuildReplayBlob(req, r)
 	s.writeRecord(ctx, req.RoomId, payouts, startedAt, totalPot, traceID, replayPb, replayVersion)
 	s.notifyReportAndRake(ctx, req, payouts, startedAt, totalPot, traceID)
+	s.notifyLargePayouts(req, payouts)
 	s.mgr.Remove(req.RoomId)
 	_ = s.sess.Unbind(ctx, req.RoomId)
 
@@ -485,5 +493,27 @@ func (s *Server) notifyReportAndRake(
 					Msg("card consume rake failed")
 			}
 		}(info)
+	}
+}
+
+// notifyLargePayouts 對 payout.delta >= NotifyMinPayout 的 winner 推「中大獎」。
+// 與 rake / report 一樣 fire-and-forget；NotifyServiceURL 為空 → 整個跳過。
+func (s *Server) notifyLargePayouts(req *gamev1.SettleRequest, payouts []*gamev1.Payout) {
+	if s.notify == nil || s.notifyMinPayout <= 0 {
+		return
+	}
+	for _, p := range payouts {
+		if p == nil || p.UserId == "" || p.Delta < s.notifyMinPayout {
+			continue
+		}
+		userID, gameID, roomID, delta := p.UserId, s.logic.GameID(), req.RoomId, p.Delta
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := s.notify.SendPayoutWin(ctx, userID, gameID, roomID, delta); err != nil {
+				s.log.Warn().Err(err).Str("user_id", userID).Str("room_id", roomID).Int64("delta", delta).
+					Msg("notify large payout failed")
+			}
+		}()
 	}
 }

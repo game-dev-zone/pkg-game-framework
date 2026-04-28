@@ -14,6 +14,7 @@ import (
 	recordv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/record/v1"
 	txv1 "github.com/game-dev-zone/pkg-proto/gen/go/club/tx/v1"
 	"github.com/game-dev-zone/pkg-game-framework/internal/cardclient"
+	"github.com/game-dev-zone/pkg-game-framework/internal/notifyclient"
 	"github.com/game-dev-zone/pkg-game-framework/internal/discovery"
 	"github.com/game-dev-zone/pkg-game-framework/internal/grpcserver"
 	"github.com/game-dev-zone/pkg-game-framework/internal/recordclient"
@@ -117,8 +118,14 @@ func Run(parent context.Context, cfg Config, logic GameLogic) error {
 		cardC = cardclient.New(cfg.CardServiceURL, 2*time.Second)
 		logger.Info().Str("url", cfg.CardServiceURL).Msg("card-service rake integration enabled")
 	}
+	var notifyC *notifyclient.Client
+	if cfg.NotifyServiceURL != "" {
+		notifyC = notifyclient.New(cfg.NotifyServiceURL, 2*time.Second)
+		logger.Info().Str("url", cfg.NotifyServiceURL).Int64("min_payout", cfg.NotifyMinPayout).
+			Msg("notify-service large-payout push enabled")
+	}
 
-	svc := grpcserver.New(mgr, sess, txc, recClient, reportC, cardC, adapter, newCtx, cfg.RecordTimeout, logger)
+	svc := grpcserver.New(mgr, sess, txc, recClient, reportC, cardC, notifyC, cfg.NotifyMinPayout, adapter, newCtx, cfg.RecordTimeout, logger)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {
